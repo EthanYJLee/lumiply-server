@@ -1,24 +1,33 @@
-# uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# 서버 시작: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
 import httpx
 import uuid
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import json
 import logging
 
+# .env 파일 로드
+load_dotenv()
+
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
+log_level = os.getenv("LOG_LEVEL", "INFO")
+logging.basicConfig(level=getattr(logging, log_level))
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# 환경 변수에서 CORS 설정 로드
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+cors_origins: List[str] = [origin.strip() for origin in cors_origins_str.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,14 +36,30 @@ app.add_middleware(
 # 작업 상태 저장소
 job_status: Dict[str, dict] = {}
 
-# 이미지 저장 디렉토리
-UPLOAD_DIR = "uploads"
-RESULTS_DIR = "results"
+# 환경 변수에서 설정 로드
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+RESULTS_DIR = os.getenv("RESULTS_DIR", "results")
+COLAB_WEBHOOK_URL = os.getenv("COLAB_WEBHOOK_URL")
+FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
+COLAB_TIMEOUT = float(os.getenv("COLAB_TIMEOUT", "300"))
+
+# 필수 환경 변수 확인
+if not COLAB_WEBHOOK_URL:
+    logger.error("❌ COLAB_WEBHOOK_URL 환경 변수가 설정되지 않았습니다!")
+    logger.error("   .env 파일에 COLAB_WEBHOOK_URL을 설정해주세요.")
+    raise ValueError("COLAB_WEBHOOK_URL 환경 변수가 필요합니다.")
+
+# 디렉토리 생성
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Google Colab 노트북 URL
-COLAB_WEBHOOK_URL = os.getenv("COLAB_WEBHOOK_URL", "https://jutta-evadable-undramatically.ngrok-free.dev/process")
+logger.info(f"✅ 환경 설정 로드 완료:")
+logger.info(f"   - COLAB_WEBHOOK_URL: {COLAB_WEBHOOK_URL}")
+logger.info(f"   - FASTAPI_BASE_URL: {FASTAPI_BASE_URL}")
+logger.info(f"   - CORS_ORIGINS: {cors_origins}")
+logger.info(f"   - UPLOAD_DIR: {UPLOAD_DIR}")
+logger.info(f"   - RESULTS_DIR: {RESULTS_DIR}")
+logger.info(f"   - COLAB_TIMEOUT: {COLAB_TIMEOUT}초")
 
 @app.post("/api/upload")
 async def upload_image(
@@ -76,8 +101,6 @@ async def upload_image(
 
 async def send_to_colab(job_id: str, file_path: str):
     """Google Colab으로 이미지 전송 및 처리 요청"""
-    FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
-    
     try:
         job_status[job_id]["status"] = "processing"
         job_status[job_id]["message"] = "Colab으로 이미지 전송 중..."
@@ -98,7 +121,7 @@ async def send_to_colab(job_id: str, file_path: str):
             "User-Agent": "FastAPI-Client/1.0"  # User-Agent 설정
         }
         
-        async with httpx.AsyncClient(timeout=300.0, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=COLAB_TIMEOUT, headers=headers) as client:
             # 파일 읽기
             with open(file_path, "rb") as f:
                 files = {"image": (os.path.basename(file_path), f, "image/png")}
@@ -145,7 +168,7 @@ async def send_to_colab(job_id: str, file_path: str):
                     raise
                     
     except httpx.TimeoutException:
-        error_msg = "Colab 서버 응답 시간 초과 (5분)"
+        error_msg = f"Colab 서버 응답 시간 초과 ({int(COLAB_TIMEOUT)}초)"
         logger.error(f"[{job_id}] ❌ {error_msg}")
         job_status[job_id]["status"] = "failed"
         job_status[job_id]["error"] = error_msg
@@ -221,7 +244,9 @@ async def root():
     """루트 엔드포인트"""
     return {
         "message": "FastAPI 서버가 실행 중입니다.",
-        "colab_webhook_url": COLAB_WEBHOOK_URL
+        "colab_webhook_url": COLAB_WEBHOOK_URL,
+        "cors_origins": cors_origins,
+        "timeout": f"{int(COLAB_TIMEOUT)}초"
     }
 
 @app.get("/health")
