@@ -133,6 +133,18 @@ async def simulate_demo_processing(job_id: str, file_path: str):
 
         await asyncio.sleep(5)
 
+        # 업로드된 합성 입력 이미지를 결과 디렉토리로 복사하여, 히스토리에서 안정적으로 참조할 수 있도록 함
+        input_ext = os.path.splitext(file_path)[1] or ".png"
+        input_result_filename = f"{job_id}_input{input_ext}"
+        input_result_path = os.path.join(RESULTS_DIR, input_result_filename)
+        try:
+            shutil.copyfile(file_path, input_result_path)
+            input_image_url = f"/results/{input_result_filename}"
+            logger.info(f"[{job_id}] 입력 합성 이미지 복사 완료: {input_result_path} (url={input_image_url})")
+        except Exception as copy_err:
+            logger.error(f"[{job_id}] 입력 합성 이미지 복사 실패: {copy_err}")
+            input_image_url = None
+
         # 색상별 샘플 이미지 매핑
         color_keys = ["white", "red", "orange", "yellow", "green", "blue", "purple"]
         color_images: Dict[str, Optional[str]] = {}
@@ -150,9 +162,11 @@ async def simulate_demo_processing(job_id: str, file_path: str):
                 color_images[color] = None
 
         result_payload = {
-            # 색상별 결과 이미지 URL
+            # 색상별 결과 이미지 URL (상대 경로)
             "images": color_images,
-            # 참고용으로 입력 이미지 경로도 함께 반환
+            # 프론트엔드에서 좌측 인풋으로 사용할 합성 입력 이미지 URL (RESULTS_DIR 기반)
+            "input_image_url": input_image_url,
+            # 참고용으로 입력 이미지 서버 경로도 함께 반환
             "original_upload_path": file_path,
         }
 
