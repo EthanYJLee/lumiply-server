@@ -97,12 +97,20 @@ async def upload_image(
             "progress": 0,
             "message": "작업이 대기 중입니다."
         }
-        # 데모 모드: 실제 Colab 통신 대신 로컬에서 처리 시뮬레이션
-        if background_tasks is not None:
-            background_tasks.add_task(simulate_demo_processing, job_id, file_path)
+        
+        # USE_DEMO = os.getenv("USE_DEMO", "false").lower() == "true"
+        USE_DEMO = False
+
+        if USE_DEMO:
+            if background_tasks is not None:
+                background_tasks.add_task(simulate_demo_processing, job_id, file_path)
+            else:
+                asyncio.create_task(simulate_demo_processing(job_id, file_path))
         else:
-            # BackgroundTasks 주입이 안 된 경우를 대비한 fallback
-            asyncio.create_task(simulate_demo_processing(job_id, file_path))
+            if background_tasks is not None:
+                background_tasks.add_task(send_to_colab, job_id, file_path)
+            else:
+                asyncio.create_task(send_to_colab(job_id, file_path))
         
         return {
             "success": True,
@@ -186,70 +194,136 @@ async def simulate_demo_processing(job_id: str, file_path: str):
 async def send_to_colab(job_id: str, file_path: str):
     """Google Colab으로 이미지 전송 및 처리 요청"""
     try:
+        # 0% → 10%: 업로드 및 Colab 전송 준비 완료
         job_status[job_id]["status"] = "processing"
-        job_status[job_id]["message"] = "Colab으로 이미지 전송 중..."
-        job_status[job_id]["progress"] = 30
-        
+        job_status[job_id]["message"] = "이미지를 Colab으로 전송 중..."
+        job_status[job_id]["progress"] = 0
+
         logger.info(f"[{job_id}] ========== Colab 전송 시작 ==========")
         logger.info(f"[{job_id}] Colab URL: {COLAB_WEBHOOK_URL}")
         logger.info(f"[{job_id}] 파일 경로: {file_path}")
-        
+
         # 파일 크기 확인
         file_size = os.path.getsize(file_path)
         logger.info(f"[{job_id}] 파일 크기: {file_size} bytes")
-        
+
         # httpx 클라이언트 설정
         # - ngrok 브라우저 경고 우회를 위한 헤더 추가
         headers = {
             "ngrok-skip-browser-warning": "true",  # ngrok 브라우저 경고 우회
-            "User-Agent": "FastAPI-Client/1.0"  # User-Agent 설정
+            "User-Agent": "FastAPI-Client/1.0",  # User-Agent 설정
         }
-        
+
+        # 색상 처리 순서 및 한글 라벨
+        color_sequence = [
+            ("white", "흰색"),
+            ("red", "빨강"),
+            ("orange", "주황"),
+            ("yellow", "노랑"),
+            ("green", "초록"),
+            ("blue", "파랑"),
+            ("purple", "보라"),
+        ]
+
+        # 7개 색상 결과를 누적할 맵
+        aggregated_images: Dict[str, str] = {}
+        input_image_url: Optional[str] = None
+
         async with httpx.AsyncClient(timeout=COLAB_TIMEOUT, headers=headers) as client:
-            # 파일 읽기
-            with open(file_path, "rb") as f:
-                files = {"image": (os.path.basename(file_path), f, "image/png")}
-                data = {
-                    "job_id": job_id, 
-                    "callback_url": f"{FASTAPI_BASE_URL}/api/callback/{job_id}"
-                }
-                
-                logger.info(f"[{job_id}] Callback URL: {data['callback_url']}")
-                logger.info(f"[{job_id}] 요청 전송 중...")
-                
-                try:
-                    response = await client.post(
-                        COLAB_WEBHOOK_URL,
-                        files=files,
-                        data=data
-                    )
-                    
-                    logger.info(f"[{job_id}] ========== Colab 응답 수신 ==========")
-                    logger.info(f"[{job_id}] 상태 코드: {response.status_code}")
-                    logger.info(f"[{job_id}] 응답 헤더: {dict(response.headers)}")
-                    logger.info(f"[{job_id}] 응답 본문: {response.text[:500]}")  # 500자만
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        logger.info(f"[{job_id}] ✅ Colab 처리 성공: {result}")
-                        job_status[job_id]["status"] = "completed"
-                        job_status[job_id]["progress"] = 100
-                        job_status[job_id]["result"] = result
-                        job_status[job_id]["message"] = "처리가 완료되었습니다."
-                    else:
-                        error_msg = f"Colab 처리 실패: {response.status_code} - {response.text}"
-                        logger.error(f"[{job_id}] ❌ {error_msg}")
-                        job_status[job_id]["status"] = "failed"
-                        job_status[job_id]["error"] = error_msg
-                        job_status[job_id]["message"] = f"처리 실패: {response.status_code}"
-                        
-                except httpx.HTTPStatusError as e:
-                    logger.error(f"[{job_id}] HTTP 상태 오류: {e.response.status_code}")
-                    logger.error(f"[{job_id}] 응답 내용: {e.response.text}")
-                    raise
-                except httpx.RequestError as e:
-                    logger.error(f"[{job_id}] 요청 오류: {str(e)}")
-                    raise
+            for idx, (color_key, color_label) in enumerate(color_sequence):
+                # 전송 완료 기준으로 10% 부여
+                base_progress = 10 + idx * 10
+                job_status[job_id]["message"] = f"{color_label} 색상 생성 중..."
+                job_status[job_id]["progress"] = base_progress
+
+                logger.info(f"[{job_id}] ---- {color_key} 색상 요청 시작 ({base_progress}%) ----")
+
+                # 매 색상마다 동일한 입력 이미지를 전송
+                with open(file_path, "rb") as f:
+                    files = {"image": (os.path.basename(file_path), f, "image/png")}
+                    data = {
+                        "job_id": job_id,
+                        # 현재 구조에서는 callback_url 을 사용하지 않으므로 빈 값 전달
+                        "callback_url": "",
+                        # Colab 에게 단일 색상만 처리하도록 전달
+                        "color": color_key,
+                    }
+
+                    try:
+                        response = await client.post(
+                            COLAB_WEBHOOK_URL,
+                            files=files,
+                            data=data,
+                        )
+
+                        logger.info(f"[{job_id}] [{color_key}] Colab 응답 수신 - 상태 코드: {response.status_code}")
+                        logger.info(f"[{job_id}] [{color_key}] 응답 헤더: {dict(response.headers)}")
+                        logger.info(f"[{job_id}] [{color_key}] 응답 본문: {response.text[:500]}")
+
+                        if response.status_code != 200:
+                            error_msg = f"Colab 처리 실패 ({color_key}): {response.status_code} - {response.text}"
+                            logger.error(f"[{job_id}] ❌ {error_msg}")
+                            job_status[job_id]["status"] = "failed"
+                            job_status[job_id]["error"] = error_msg
+                            job_status[job_id]["message"] = f"{color_label} 색상 처리 실패: {response.status_code}"
+                            return
+
+                        raw = response.json()
+                        logger.info(f"[{job_id}] [{color_key}] ✅ Colab 처리 성공: {raw}")
+
+                        inner_result = raw.get("result") if isinstance(raw, dict) else None
+                        if not inner_result or not isinstance(inner_result, dict):
+                            error_msg = f"Colab 응답 형식 오류 ({color_key}): result 필드가 없습니다."
+                            logger.error(f"[{job_id}] ❌ {error_msg}")
+                            job_status[job_id]["status"] = "failed"
+                            job_status[job_id]["error"] = error_msg
+                            job_status[job_id]["message"] = f"{color_label} 색상 처리 중 응답 형식 오류"
+                            return
+
+                        # 최초 응답에서 input_image_url 을 한 번만 확보
+                        if input_image_url is None:
+                            input_image_url = inner_result.get("input_image_url")
+
+                        # 이번 색상의 결과 이미지 URL 추출
+                        images_map = inner_result.get("images", {})
+                        image_url: Optional[str] = None
+                        if isinstance(images_map, dict):
+                            image_url = images_map.get(color_key)
+                        if not image_url:
+                            # 단일 색상용으로 image_url 이 있을 수도 있음
+                            image_url = inner_result.get("image_url")
+
+                        if not image_url:
+                            error_msg = f"Colab 응답에 {color_key} 색상 결과 URL 이 없습니다."
+                            logger.error(f"[{job_id}] ❌ {error_msg}")
+                            job_status[job_id]["status"] = "failed"
+                            job_status[job_id]["error"] = error_msg
+                            job_status[job_id]["message"] = f"{color_label} 색상 결과 URL 없음"
+                            return
+
+                        aggregated_images[color_key] = image_url
+
+                        # 해당 색상 처리 완료 시점: +10%
+                        completed_progress = 10 + (idx + 1) * 10
+                        job_status[job_id]["progress"] = completed_progress
+                        job_status[job_id]["message"] = f"{color_label} 색상 생성 완료 ({completed_progress}%)"
+
+                    except httpx.HTTPStatusError as e:
+                        logger.error(f"[{job_id}] [{color_key}] HTTP 상태 오류: {e.response.status_code}")
+                        logger.error(f"[{job_id}] [{color_key}] 응답 내용: {e.response.text}")
+                        raise
+                    except httpx.RequestError as e:
+                        logger.error(f"[{job_id}] [{color_key}] 요청 오류: {str(e)}")
+                        raise
+
+        # 모든 색상 처리 완료 → 100%
+        job_status[job_id]["status"] = "completed"
+        job_status[job_id]["progress"] = 100
+        job_status[job_id]["message"] = "모든 색상 이미지 생성이 완료되었습니다."
+        job_status[job_id]["result"] = {
+            "images": aggregated_images,
+            "input_image_url": input_image_url,
+        }
                     
     except httpx.TimeoutException:
         error_msg = f"Colab 서버 응답 시간 초과 ({int(COLAB_TIMEOUT)}초)"
@@ -315,69 +389,105 @@ async def get_job_status(job_id: str):
         )
     return job_status[job_id]
 
+# @app.post("/api/callback/{job_id}")
+# async def colab_callback(job_id: str, result: dict = Body(...)):
+#     """Colab에서 처리 완료 후 콜백"""
+#     try:
+#         logger.info(f"[{job_id}] ========== 콜백 수신 ==========")
+#         logger.info(f"[{job_id}] 콜백 데이터: {result}")
+        
+#         if job_id not in job_status:
+#             logger.warning(f"[{job_id}] 존재하지 않는 작업 ID")
+#             return JSONResponse(
+#                 status_code=404,
+#                 content={"error": "작업을 찾을 수 없습니다."}
+#             )
+        
+#         # 기본 상태/메시지 업데이트
+#         job_status[job_id]["status"] = result.get("status", "completed")
+#         job_status[job_id]["progress"] = 100
+#         if "message" in result:
+#             job_status[job_id]["message"] = result["message"]
+
+#         # Colab에서 전달된 결과 처리
+#         raw_result = result.get("result")
+#         result_payload: Dict = {}
+
+#         if isinstance(raw_result, dict):
+#             result_payload = dict(raw_result)  # 원본 유지 위해 복사
+#             # image_base64가 있으면 디코딩해서 결과 파일로 저장
+#             image_b64 = result_payload.get("image_base64")
+#             if image_b64:
+#                 try:
+#                     image_bytes = base64.b64decode(image_b64)
+#                     result_path = os.path.join(RESULTS_DIR, f"{job_id}.png")
+#                     with open(result_path, "wb") as f:
+#                         f.write(image_bytes)
+
+#                     image_url = f"/results/{job_id}.png"
+#                     # 프론트에서 바로 사용할 수 있는 URL을 제공
+#                     result_payload["image_url"] = image_url
+#                     # 불필요하게 큰 base64 문자열은 상태에서 제거 (옵션)
+#                     result_payload.pop("image_base64", None)
+
+#                     logger.info(f"[{job_id}] 결과 이미지 저장 완료: {result_path} (url={image_url})")
+#                 except Exception as e:
+#                     logger.error(f"[{job_id}] 결과 이미지 저장 실패: {str(e)}", exc_info=True)
+
+#         if result_payload:
+#             job_status[job_id]["result"] = result_payload
+
+#         # 에러가 포함된 경우 상태를 failed 로 덮어씀
+#         if "error" in result:
+#             job_status[job_id]["error"] = result["error"]
+#             job_status[job_id]["status"] = "failed"
+        
+#         logger.info(f"[{job_id}] ✅ 콜백 처리 완료")
+#         return {"success": True, "job_id": job_id}
+        
+#     except Exception as e:
+#         logger.error(f"[{job_id}] ❌ 콜백 처리 오류: {str(e)}", exc_info=True)
+#         return JSONResponse(
+#             status_code=500,
+#             content={"success": False, "error": str(e)}
+#         )
 @app.post("/api/callback/{job_id}")
-async def colab_callback(job_id: str, result: dict = Body(...)):
-    """Colab에서 처리 완료 후 콜백"""
+async def colab_callback(job_id: str, payload: dict = Body(...)):
     try:
         logger.info(f"[{job_id}] ========== 콜백 수신 ==========")
-        logger.info(f"[{job_id}] 콜백 데이터: {result}")
-        
+        logger.info(f"[{job_id}] 콜백 데이터: {payload}")
+
         if job_id not in job_status:
             logger.warning(f"[{job_id}] 존재하지 않는 작업 ID")
-            return JSONResponse(
-                status_code=404,
-                content={"error": "작업을 찾을 수 없습니다."}
-            )
-        
-        # 기본 상태/메시지 업데이트
-        job_status[job_id]["status"] = result.get("status", "completed")
+            return JSONResponse(status_code=404, content={"error": "작업을 찾을 수 없습니다."})
+
+        status_value = payload.get("status", "completed")
+        message = payload.get("message") or "이미지 생성이 완료되었습니다."
+        raw_result = payload.get("result") or {}
+
+        images = raw_result.get("images", {})              # 색상별 결과 URL 맵 (이미 절대 URL이면 그대로)
+        input_image_url = raw_result.get("input_image_url")  # 좌측 인풋 이미지 URL
+
+        # 상태 업데이트
+        job_status[job_id]["status"] = status_value
         job_status[job_id]["progress"] = 100
-        if "message" in result:
-            job_status[job_id]["message"] = result["message"]
+        job_status[job_id]["message"] = message
+        job_status[job_id]["result"] = {
+            "images": images,
+            "input_image_url": input_image_url,
+        }
 
-        # Colab에서 전달된 결과 처리
-        raw_result = result.get("result")
-        result_payload: Dict = {}
-
-        if isinstance(raw_result, dict):
-            result_payload = dict(raw_result)  # 원본 유지 위해 복사
-
-            # image_base64가 있으면 디코딩해서 결과 파일로 저장
-            image_b64 = result_payload.get("image_base64")
-            if image_b64:
-                try:
-                    image_bytes = base64.b64decode(image_b64)
-                    result_path = os.path.join(RESULTS_DIR, f"{job_id}.png")
-                    with open(result_path, "wb") as f:
-                        f.write(image_bytes)
-
-                    image_url = f"/results/{job_id}.png"
-                    # 프론트에서 바로 사용할 수 있는 URL을 제공
-                    result_payload["image_url"] = image_url
-                    # 불필요하게 큰 base64 문자열은 상태에서 제거 (옵션)
-                    result_payload.pop("image_base64", None)
-
-                    logger.info(f"[{job_id}] 결과 이미지 저장 완료: {result_path} (url={image_url})")
-                except Exception as e:
-                    logger.error(f"[{job_id}] 결과 이미지 저장 실패: {str(e)}", exc_info=True)
-
-        if result_payload:
-            job_status[job_id]["result"] = result_payload
-
-        # 에러가 포함된 경우 상태를 failed 로 덮어씀
-        if "error" in result:
-            job_status[job_id]["error"] = result["error"]
+        # 에러 포함 시 상태 덮어쓰기
+        if "error" in payload:
+            job_status[job_id]["error"] = payload["error"]
             job_status[job_id]["status"] = "failed"
-        
+
         logger.info(f"[{job_id}] ✅ 콜백 처리 완료")
         return {"success": True, "job_id": job_id}
-        
+
     except Exception as e:
         logger.error(f"[{job_id}] ❌ 콜백 처리 오류: {str(e)}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 @app.get("/")
 async def root():
