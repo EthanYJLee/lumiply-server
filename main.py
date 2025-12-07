@@ -1,6 +1,6 @@
 # 서버 시작: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
-from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Body
+from fastapi import FastAPI, File, UploadFile, BackgroundTasks, Body, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -356,9 +356,38 @@ async def download_image(path: str, filename: Optional[str] = None):
   """
   프론트엔드에서 전달한 이미지 경로를 기반으로 파일 다운로드를 제공
   - path 는 전체 URL 또는 /sample_outputs/... /results/... 형태 모두 허용
+  - 외부 URL (ngrok 등)의 경우 서버에서 프록시하여 CORS 우회
   """
-  # 전체 URL 이 들어온 경우 path 부분만 추출
   parsed = urlparse(path)
+  
+  # 외부 URL인 경우 (ngrok 등) 서버에서 프록시
+  if parsed.scheme in ("http", "https") and parsed.netloc:
+      try:
+          async with httpx.AsyncClient(timeout=60.0) as client:
+              # ngrok 브라우저 경고 우회를 위한 헤더 추가
+              headers = {"ngrok-skip-browser-warning": "true"}
+              response = await client.get(path, headers=headers)
+              response.raise_for_status()
+              
+              # Content-Type 추출
+              content_type = response.headers.get("content-type", "application/octet-stream")
+              
+              # 파일명 결정
+              download_name = filename or os.path.basename(parsed.path) or "download"
+              
+              return Response(
+                  content=response.content,
+                  media_type=content_type,
+                  headers={
+                      "Content-Disposition": f'attachment; filename="{download_name}"'
+                  }
+              )
+      except httpx.HTTPStatusError as e:
+          raise HTTPException(status_code=e.response.status_code, detail=f"외부 이미지 다운로드 실패: {e}")
+      except Exception as e:
+          raise HTTPException(status_code=500, detail=f"이미지 프록시 중 오류: {str(e)}")
+  
+  # 로컬 파일 경로인 경우
   rel_path = parsed.path if parsed.scheme in ("http", "https") else path
 
   # 허용된 디렉토리만 처리
