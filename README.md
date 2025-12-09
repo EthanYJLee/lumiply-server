@@ -1,5 +1,7 @@
 ## Lumiply Server (FastAPI)
 
+![cover](images/lumiply_server_cover.png)
+
 React 프론트엔드와 Colab 상의 LumiNet 모델 사이를 연결해 주는 **이미지 조명 생성용 FastAPI 서버**입니다.  
 클라이언트에서 업로드한 “방 사진 + 가상 조명” 이미지를 받아 Colab으로 전송하고, 7가지 색상의 결과 이미지를 다시 모아서 프론트로 돌려줍니다.
 
