@@ -107,6 +107,7 @@ async def upload_image(
             else:
                 asyncio.create_task(simulate_demo_processing(job_id, file_path))
         else:
+            print('================= send_to_colab =================')
             if background_tasks is not None:
                 background_tasks.add_task(send_to_colab, job_id, file_path)
             else:
@@ -236,7 +237,7 @@ async def send_to_colab(job_id: str, file_path: str):
                 job_status[job_id]["message"] = f"{color_label} 색상 생성 중..."
                 job_status[job_id]["progress"] = base_progress
 
-                logger.info(f"[{job_id}] ---- {color_key} 색상 요청 시작 ({base_progress}%) ----")
+                logger.info(f"[{job_id}] ---- {color_key} 색상 요청 시작 ({base_progress}%) ----\n")
 
                 # 매 색상마다 동일한 입력 이미지를 전송
                 with open(file_path, "rb") as f:
@@ -256,8 +257,8 @@ async def send_to_colab(job_id: str, file_path: str):
                             data=data,
                         )
 
-                        logger.info(f"[{job_id}] [{color_key}] Colab 응답 수신 - 상태 코드: {response.status_code}")
-                        logger.info(f"[{job_id}] [{color_key}] 응답 헤더: {dict(response.headers)}")
+                        logger.info(f"[{job_id}] [{color_key}] Colab 응답 수신 - 상태 코드: {response.status_code}\n")
+                        logger.info(f"[{job_id}] [{color_key}] 응답 헤더: {dict(response.headers)}\n")
                         logger.info(f"[{job_id}] [{color_key}] 응답 본문: {response.text[:500]}")
 
                         if response.status_code != 200:
@@ -301,7 +302,17 @@ async def send_to_colab(job_id: str, file_path: str):
                             job_status[job_id]["message"] = f"{color_label} 색상 결과 URL 없음"
                             return
 
+                        # 누적 맵에 반영
                         aggregated_images[color_key] = image_url
+
+                        # 부분 결과를 job_status 에 바로 반영하여 프론트가 색상별로 점진적으로 표시할 수 있도록 함
+                        prev_result = job_status[job_id].get("result") or {}
+                        prev_images = dict(prev_result.get("images") or {})
+                        prev_images[color_key] = image_url
+                        job_status[job_id]["result"] = {
+                            "images": prev_images,
+                            "input_image_url": input_image_url,
+                        }
 
                         # 해당 색상 처리 완료 시점: +10%
                         completed_progress = 10 + (idx + 1) * 10
@@ -320,6 +331,7 @@ async def send_to_colab(job_id: str, file_path: str):
         job_status[job_id]["status"] = "completed"
         job_status[job_id]["progress"] = 100
         job_status[job_id]["message"] = "모든 색상 이미지 생성이 완료되었습니다."
+        # 최종 결과는 누적 맵을 기준으로 한 번 더 덮어써 정합성을 보장
         job_status[job_id]["result"] = {
             "images": aggregated_images,
             "input_image_url": input_image_url,
