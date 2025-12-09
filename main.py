@@ -51,7 +51,7 @@ COLAB_TIMEOUT = float(os.getenv("COLAB_TIMEOUT", "300"))
 
 # 필수 환경 변수 확인
 if not COLAB_WEBHOOK_URL:
-    logger.error("❌ COLAB_WEBHOOK_URL 환경 변수가 설정되지 않았습니다!")
+    logger.error("COLAB_WEBHOOK_URL 환경 변수가 설정되지 않았습니다!")
     logger.error("   .env 파일에 COLAB_WEBHOOK_URL을 설정해주세요.")
     raise ValueError("COLAB_WEBHOOK_URL 환경 변수가 필요합니다.")
 
@@ -67,7 +67,7 @@ app.mount("/results", StaticFiles(directory=RESULTS_DIR), name="results")
 if os.path.isdir(SAMPLE_OUTPUTS_DIR):
     app.mount("/sample_outputs", StaticFiles(directory=SAMPLE_OUTPUTS_DIR), name="sample_outputs")
 
-logger.info(f"✅ 환경 설정 로드 완료:")
+logger.info(f"환경 설정 로드 완료:")
 logger.info(f"   - COLAB_WEBHOOK_URL: {COLAB_WEBHOOK_URL}")
 logger.info(f"   - FASTAPI_BASE_URL: {FASTAPI_BASE_URL}")
 logger.info(f"   - CORS_ORIGINS: {cors_origins}")
@@ -187,7 +187,7 @@ async def simulate_demo_processing(job_id: str, file_path: str):
         logger.info(f"[{job_id}] 데모 처리 완료")
     except Exception as e:
         error_msg = f"데모 처리 중 오류 발생: {str(e)}"
-        logger.error(f"[{job_id}] ❌ {error_msg}", exc_info=True)
+        logger.error(f"[{job_id}] {error_msg}", exc_info=True)
         job_status[job_id]["status"] = "failed"
         job_status[job_id]["error"] = error_msg
         job_status[job_id]["message"] = error_msg
@@ -263,19 +263,19 @@ async def send_to_colab(job_id: str, file_path: str):
 
                         if response.status_code != 200:
                             error_msg = f"Colab 처리 실패 ({color_key}): {response.status_code} - {response.text}"
-                            logger.error(f"[{job_id}] ❌ {error_msg}")
+                            logger.error(f"[{job_id}] {error_msg}")
                             job_status[job_id]["status"] = "failed"
                             job_status[job_id]["error"] = error_msg
                             job_status[job_id]["message"] = f"{color_label} 색상 처리 실패: {response.status_code}"
                             return
 
                         raw = response.json()
-                        logger.info(f"[{job_id}] [{color_key}] ✅ Colab 처리 성공: {raw}")
+                        logger.info(f"[{job_id}] [{color_key}] Colab 처리 성공: {raw}")
 
                         inner_result = raw.get("result") if isinstance(raw, dict) else None
                         if not inner_result or not isinstance(inner_result, dict):
                             error_msg = f"Colab 응답 형식 오류 ({color_key}): result 필드가 없습니다."
-                            logger.error(f"[{job_id}] ❌ {error_msg}")
+                            logger.error(f"[{job_id}] {error_msg}")
                             job_status[job_id]["status"] = "failed"
                             job_status[job_id]["error"] = error_msg
                             job_status[job_id]["message"] = f"{color_label} 색상 처리 중 응답 형식 오류"
@@ -296,7 +296,7 @@ async def send_to_colab(job_id: str, file_path: str):
 
                         if not image_url:
                             error_msg = f"Colab 응답에 {color_key} 색상 결과 URL 이 없습니다."
-                            logger.error(f"[{job_id}] ❌ {error_msg}")
+                            logger.error(f"[{job_id}] {error_msg}")
                             job_status[job_id]["status"] = "failed"
                             job_status[job_id]["error"] = error_msg
                             job_status[job_id]["message"] = f"{color_label} 색상 결과 URL 없음"
@@ -305,7 +305,7 @@ async def send_to_colab(job_id: str, file_path: str):
                         # 누적 맵에 반영
                         aggregated_images[color_key] = image_url
 
-                        # 부분 결과를 job_status 에 바로 반영하여 프론트가 색상별로 점진적으로 표시할 수 있도록 함
+                        # 부분 결과를 job_status 에 바로 반영하여 프론트가 색상별로 점진적으로 표시할 수 있도록
                         prev_result = job_status[job_id].get("result") or {}
                         prev_images = dict(prev_result.get("images") or {})
                         prev_images[color_key] = image_url
@@ -339,25 +339,25 @@ async def send_to_colab(job_id: str, file_path: str):
                     
     except httpx.TimeoutException:
         error_msg = f"Colab 서버 응답 시간 초과 ({int(COLAB_TIMEOUT)}초)"
-        logger.error(f"[{job_id}] ❌ {error_msg}")
+        logger.error(f"[{job_id}] {error_msg}")
         job_status[job_id]["status"] = "failed"
         job_status[job_id]["error"] = error_msg
         job_status[job_id]["message"] = "처리 시간이 초과되었습니다."
     except httpx.ConnectError as e:
         error_msg = f"Colab 서버 연결 실패: {str(e)}"
-        logger.error(f"[{job_id}] ❌ {error_msg}")
+        logger.error(f"[{job_id}] {error_msg}")
         job_status[job_id]["status"] = "failed"
         job_status[job_id]["error"] = error_msg
         job_status[job_id]["message"] = "Colab 서버에 연결할 수 없습니다. URL을 확인하세요."
     except httpx.RequestError as e:
         error_msg = f"Colab 서버 요청 오류: {str(e)}"
-        logger.error(f"[{job_id}] ❌ {error_msg}")
+        logger.error(f"[{job_id}] {error_msg}")
         job_status[job_id]["status"] = "failed"
         job_status[job_id]["error"] = error_msg
         job_status[job_id]["message"] = "Colab 서버 요청 중 오류가 발생했습니다."
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"[{job_id}] ❌ 처리 오류: {error_msg}", exc_info=True)
+        logger.error(f"[{job_id}] 처리 오류: {error_msg}", exc_info=True)
         job_status[job_id]["status"] = "failed"
         job_status[job_id]["error"] = error_msg
         job_status[job_id]["message"] = f"처리 중 오류가 발생했습니다: {error_msg}"
@@ -430,68 +430,6 @@ async def get_job_status(job_id: str):
         )
     return job_status[job_id]
 
-# @app.post("/api/callback/{job_id}")
-# async def colab_callback(job_id: str, result: dict = Body(...)):
-#     """Colab에서 처리 완료 후 콜백"""
-#     try:
-#         logger.info(f"[{job_id}] ========== 콜백 수신 ==========")
-#         logger.info(f"[{job_id}] 콜백 데이터: {result}")
-        
-#         if job_id not in job_status:
-#             logger.warning(f"[{job_id}] 존재하지 않는 작업 ID")
-#             return JSONResponse(
-#                 status_code=404,
-#                 content={"error": "작업을 찾을 수 없습니다."}
-#             )
-        
-#         # 기본 상태/메시지 업데이트
-#         job_status[job_id]["status"] = result.get("status", "completed")
-#         job_status[job_id]["progress"] = 100
-#         if "message" in result:
-#             job_status[job_id]["message"] = result["message"]
-
-#         # Colab에서 전달된 결과 처리
-#         raw_result = result.get("result")
-#         result_payload: Dict = {}
-
-#         if isinstance(raw_result, dict):
-#             result_payload = dict(raw_result)  # 원본 유지 위해 복사
-#             # image_base64가 있으면 디코딩해서 결과 파일로 저장
-#             image_b64 = result_payload.get("image_base64")
-#             if image_b64:
-#                 try:
-#                     image_bytes = base64.b64decode(image_b64)
-#                     result_path = os.path.join(RESULTS_DIR, f"{job_id}.png")
-#                     with open(result_path, "wb") as f:
-#                         f.write(image_bytes)
-
-#                     image_url = f"/results/{job_id}.png"
-#                     # 프론트에서 바로 사용할 수 있는 URL을 제공
-#                     result_payload["image_url"] = image_url
-#                     # 불필요하게 큰 base64 문자열은 상태에서 제거 (옵션)
-#                     result_payload.pop("image_base64", None)
-
-#                     logger.info(f"[{job_id}] 결과 이미지 저장 완료: {result_path} (url={image_url})")
-#                 except Exception as e:
-#                     logger.error(f"[{job_id}] 결과 이미지 저장 실패: {str(e)}", exc_info=True)
-
-#         if result_payload:
-#             job_status[job_id]["result"] = result_payload
-
-#         # 에러가 포함된 경우 상태를 failed 로 덮어씀
-#         if "error" in result:
-#             job_status[job_id]["error"] = result["error"]
-#             job_status[job_id]["status"] = "failed"
-        
-#         logger.info(f"[{job_id}] ✅ 콜백 처리 완료")
-#         return {"success": True, "job_id": job_id}
-        
-#     except Exception as e:
-#         logger.error(f"[{job_id}] ❌ 콜백 처리 오류: {str(e)}", exc_info=True)
-#         return JSONResponse(
-#             status_code=500,
-#             content={"success": False, "error": str(e)}
-#         )
 @app.post("/api/callback/{job_id}")
 async def colab_callback(job_id: str, payload: dict = Body(...)):
     try:
@@ -523,11 +461,11 @@ async def colab_callback(job_id: str, payload: dict = Body(...)):
             job_status[job_id]["error"] = payload["error"]
             job_status[job_id]["status"] = "failed"
 
-        logger.info(f"[{job_id}] ✅ 콜백 처리 완료")
+        logger.info(f"[{job_id}] 콜백 처리 완료")
         return {"success": True, "job_id": job_id}
 
     except Exception as e:
-        logger.error(f"[{job_id}] ❌ 콜백 처리 오류: {str(e)}", exc_info=True)
+        logger.error(f"[{job_id}] 콜백 처리 오류: {str(e)}", exc_info=True)
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 @app.get("/")

@@ -2,6 +2,18 @@
 
 ![cover](images/lumiply_server_cover.png)
 
+## 전체 세팅 순서
+0. 미리 제출한 (전달 드린) 환경 변수 압축 파일을 해제한 뒤 아래 단계에서 필요한 환경 변수 파일들을 준비해주세요. 코랩 환경은 VRAM 11G 이상의 GPU가 필요합니다.
+1. 구글 드라이브 (/content/drive/MyDrive/) 안에 LumiNet_Files 폴더를 생성합니다.
+2. 코랩 환경에서 드라이브 마운트 후 LumiNet_Files 폴더 아래에 [**Lumiply Colab**](https://github.com/EthanYJLee/lumiply-colab) git을 clone 받습니다.
+3. [허깅페이스](https://huggingface.co/EthanYJ/Lumiply/tree/main)에서 adaptors, ckpt 폴더 하위의 파일을 다운로드 받아 clone 받은 **Lumiply Colab**의 각각의 폴더 안에 넣습니다.
+4. **Lumiply Colab** 루트 위치에서 lumiply_inference.ipynb 셀을 순차적으로 실행하여 Flask + ngrok 서버를 구동합니다 (이 때 **huggingface, ngrok 토큰**이 필요합니다).
+5. 로컬 기기에서 [**Lumiply Server**](https://github.com/EthanYJLee/lumiply-server) git을 clone 받습니다 (프로젝트 루트 위치에 **.env** 파일이 필요합니다).
+6. **Lumiply Server** 루트 위치에서 의존성을 설치(`pip install -r requirements.txt`)한 뒤 `uvicorn main:app --reload --host 0.0.0.0 --port 8000`을 실행하여 FastAPI 서버를 구동합니다.
+7. 로컬 기기에서 [**Lumiply Client**](https://github.com/EthanYJLee/lumiply-client) git을 clone 받습니다 (프로젝트 루트 위치에 **.env.local** 파일이 필요합니다).
+8. **Lumiply Client** 루트 위치에서 의존성을 설치(`npm install`)한 뒤 `npm start`을 실행하여 React를 구동합니다.
+9. 브라우저에서 `http://localhost:3000/` 또는 `http://127.0.0.1:3000/`로 접속하여 서비스를 사용합니다.
+
 React 프론트엔드와 Colab 상의 LumiNet 모델 사이를 연결해 주는 **이미지 조명 생성용 FastAPI 서버**입니다.  
 클라이언트에서 업로드한 “방 사진 + 가상 조명” 이미지를 받아 Colab으로 전송하고, 7가지 색상의 결과 이미지를 다시 모아서 프론트로 돌려줍니다.
 
