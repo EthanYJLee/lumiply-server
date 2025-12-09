@@ -1,5 +1,6 @@
 ## Lumiply Server (FastAPI)
 
+![demo](images/lumiply_gif_demo.gif)
 ![cover](images/lumiply_server_cover.png)
 
 ## 전체 세팅 순서
