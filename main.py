@@ -80,7 +80,25 @@ async def upload_image(
     image: UploadFile = File(...),
     background_tasks: BackgroundTasks = None
 ):
-    """이미지 업로드 및 처리 작업 시작"""
+    """
+    업로드된 합성 이미지를 디스크에 저장하고 Colab 쪽으로의 처리 작업을 비동기로 시작합니다.
+
+    Parameters
+    ----------
+    image : UploadFile
+        클라이언트에서 전송한 합성 입력 이미지 파일.
+    background_tasks : BackgroundTasks, optional
+        FastAPI 백그라운드 작업 큐. 주입되지 않은 경우 asyncio.create_task 로 직접 작업을 생성합니다.
+
+    Returns
+    -------
+    dict
+        success 플래그, 생성된 job_id, 사용자 안내용 message 를 포함하는 JSON 응답.
+
+    Notes
+    -----
+    - 실제 색상별 생성 처리(send_to_colab)는 비동기로 수행되며, 상태 조회는 /api/status/{job_id} 로 합니다.
+    """
     try:
         job_id = str(uuid.uuid4())
         logger.info(f"새 작업 시작: {job_id}")
@@ -129,10 +147,20 @@ async def upload_image(
 
 async def simulate_demo_processing(job_id: str, file_path: str):
     """
-    데모용 처리 시뮬레이션:
-    - 5초 대기 후
-    - sample_outputs 디렉토리의 색상별 샘플 이미지를 그대로 반환
-      (white/red/orange/yellow/green/blue/purple 총 7장)
+    실제 Colab 연동 없이, 미리 준비된 샘플 이미지를 사용해 처리 과정을 흉내내는 데모용 시뮬레이터입니다.
+
+    동작 개요
+    --------
+    1. 5초 동안 대기하여 처리 지연을 에뮬레이션합니다.
+    2. 업로드된 입력 이미지를 results 디렉토리로 복사하여 input_image_url 로 노출합니다.
+    3. sample_outputs 디렉토리의 색상별 샘플 이미지 경로를 job_status[job_id]["result"]["images"] 에 매핑합니다.
+
+    Parameters
+    ----------
+    job_id : str
+        업로드 단계에서 생성된 작업 ID.
+    file_path : str
+        업로드된 합성 입력 이미지의 서버 내 경로.
     """
     try:
         logger.info(f"[{job_id}] 데모 처리 시작 (simulate_demo_processing)")
@@ -193,7 +221,23 @@ async def simulate_demo_processing(job_id: str, file_path: str):
         job_status[job_id]["message"] = error_msg
 
 async def send_to_colab(job_id: str, file_path: str):
-    """Google Colab으로 이미지 전송 및 처리 요청"""
+    """
+    업로드된 이미지를 Google Colab 인퍼런스 엔진으로 전송하고, 7개 색상을 순차적으로 생성합니다.
+
+    동작 개요
+    --------
+    1. 색상 시퀀스(white → purple)에 대해 동일한 입력 이미지를 매번 전송합니다.
+    2. 각 색상 처리 결과를 수신할 때마다 job_status[job_id]["result"]["images"] 에 누적 저장하여
+       프론트엔드가 부분 결과를 단계적으로 사용할 수 있게 합니다.
+    3. HTTP 오류, 타임아웃, 연결 오류가 발생하면 job_status 를 "failed" 로 설정하고 상세 메시지를 남깁니다.
+
+    Parameters
+    ----------
+    job_id : str
+        업로드 단계에서 생성된 작업 ID.
+    file_path : str
+        업로드된 합성 입력 이미지의 서버 내 경로.
+    """
     try:
         # 0% → 10%: 업로드 및 Colab 전송 준비 완료
         job_status[job_id]["status"] = "processing"
@@ -366,9 +410,26 @@ async def send_to_colab(job_id: str, file_path: str):
 @app.get("/api/download_image")
 async def download_image(path: str, filename: Optional[str] = None):
   """
-  프론트엔드에서 전달한 이미지 경로를 기반으로 파일 다운로드를 제공
-  - path 는 전체 URL 또는 /sample_outputs/... /results/... 형태 모두 허용
-  - 외부 URL (ngrok 등)의 경우 서버에서 프록시하여 CORS 우회
+  프론트엔드에서 전달한 이미지 경로를 기반으로 안전하게 파일 다운로드를 제공합니다.
+
+  Parameters
+  ----------
+  path : str
+      다운로드할 이미지의 경로. 전체 URL 또는 `/sample_outputs/...`, `/results/...` 형태 모두 허용합니다.
+  filename : str, optional
+      브라우저에 노출할 다운로드 파일명. 지정하지 않으면 원본 파일명을 그대로 사용합니다.
+
+  동작 방식
+  --------
+  - 외부 URL(ngrok 등)인 경우: 서버가 직접 이미지를 GET 해서 Response 로 프록시(CORS 우회).
+  - 로컬 정적 경로인 경우: SAMPLE_OUTPUTS_DIR / RESULTS_DIR 내 파일만 허용하여 FileResponse 로 반환.
+
+  Raises
+  ------
+  HTTPException
+      - 400: 허용되지 않은 경로 패턴인 경우
+      - 404: 파일을 찾을 수 없는 경우
+      - 5xx: 외부 URL 프록시 중 예외가 발생한 경우
   """
   parsed = urlparse(path)
   
@@ -422,7 +483,23 @@ async def download_image(path: str, filename: Optional[str] = None):
 
 @app.get("/api/status/{job_id}")
 async def get_job_status(job_id: str):
-    """작업 상태 조회"""
+    """
+    특정 job_id 에 대한 현재 처리 상태를 조회합니다.
+
+    Parameters
+    ----------
+    job_id : str
+        조회할 작업 ID.
+
+    Returns
+    -------
+    dict
+        - status, progress, message, result, error(옵션) 필드를 포함한 작업 상태 객체.
+
+    Notes
+    -----
+    - 존재하지 않는 job_id 인 경우 404 JSON 응답을 반환합니다.
+    """
     if job_id not in job_status:
         return JSONResponse(
             status_code=404,
@@ -470,7 +547,14 @@ async def colab_callback(job_id: str, payload: dict = Body(...)):
 
 @app.get("/")
 async def root():
-    """루트 엔드포인트"""
+    """
+    간단한 루트 엔드포인트로, 서버가 정상적으로 기동되었는지와 주요 환경 설정을 확인할 수 있습니다.
+
+    Returns
+    -------
+    dict
+        서버 상태 메시지와 현재 사용 중인 Colab Webhook URL, CORS 설정, 타임아웃 값.
+    """
     return {
         "message": "FastAPI 서버가 실행 중입니다.",
         "colab_webhook_url": COLAB_WEBHOOK_URL,
@@ -480,13 +564,29 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """헬스 체크"""
+    """
+    모니터링 및 로드밸런서용 헬스 체크 엔드포인트입니다.
+
+    Returns
+    -------
+    dict
+        {"status": "healthy"} 형태의 단순 응답.
+    """
     return {"status": "healthy"}
 
 # Colab 연결 테스트 엔드포인트 (디버깅용)
 @app.get("/api/test-colab")
 async def test_colab():
-    """Colab 서버 연결 테스트"""
+    """
+    현재 설정된 COLAB_WEBHOOK_URL 을 기준으로 Colab 서버와의 연결을 사전에 검증하기 위한 엔드포인트입니다.
+
+    Returns
+    -------
+    dict
+        - success: bool
+        - status_code / response: health 체크 성공 시 응답 코드 및 내용
+        - error: 실패 시 예외 메시지
+    """
     import httpx
     
     try:
