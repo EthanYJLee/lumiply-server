@@ -374,7 +374,7 @@ async def send_to_colab(job_id: str, file_path: str):
         # 모든 색상 처리 완료 → 100%
         job_status[job_id]["status"] = "completed"
         job_status[job_id]["progress"] = 100
-        job_status[job_id]["message"] = "모든 색상 이미지 생성이 완료되었습니다."
+        job_status[job_id]["message"] = "이미지 생성"
         # 최종 결과는 누적 맵을 기준으로 한 번 더 덮어써 정합성을 보장
         job_status[job_id]["result"] = {
             "images": aggregated_images,
