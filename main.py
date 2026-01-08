@@ -44,6 +44,7 @@ job_status: Dict[str, dict] = {}
 
 # 환경 변수에서 설정 로드
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+INPUTS_DIR = os.getenv("INPUTS_DIR", "inputs")
 RESULTS_DIR = os.getenv("RESULTS_DIR", "results")
 COLAB_WEBHOOK_URL = os.getenv("COLAB_WEBHOOK_URL")
 FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
@@ -57,12 +58,14 @@ if not COLAB_WEBHOOK_URL:
 
 # 디렉토리 생성
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(INPUTS_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # 샘플 출력 디렉토리 (데모용 색상별 결과 이미지)
 SAMPLE_OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "sample_outputs")
 
 # 결과 이미지 정적 서빙
+app.mount("/inputs", StaticFiles(directory=INPUTS_DIR), name="inputs")
 app.mount("/results", StaticFiles(directory=RESULTS_DIR), name="results")
 if os.path.isdir(SAMPLE_OUTPUTS_DIR):
     app.mount("/sample_outputs", StaticFiles(directory=SAMPLE_OUTPUTS_DIR), name="sample_outputs")
@@ -72,6 +75,7 @@ logger.info(f"   - COLAB_WEBHOOK_URL: {COLAB_WEBHOOK_URL}")
 logger.info(f"   - FASTAPI_BASE_URL: {FASTAPI_BASE_URL}")
 logger.info(f"   - CORS_ORIGINS: {cors_origins}")
 logger.info(f"   - UPLOAD_DIR: {UPLOAD_DIR}")
+logger.info(f"   - INPUTS_DIR: {INPUTS_DIR}")
 logger.info(f"   - RESULTS_DIR: {RESULTS_DIR}")
 logger.info(f"   - COLAB_TIMEOUT: {COLAB_TIMEOUT}초")
 
@@ -109,11 +113,29 @@ async def upload_image(
             f.write(contents)
         
         logger.info(f"파일 저장 완료: {file_path} (크기: {len(contents)} bytes)")
+
+        # 업로드된 합성 입력 이미지를 inputs 디렉토리에 복사하여,
+        # 새로고침/히스토리에서도 안정적으로 참조할 수 있는 input_image_url 을 즉시 확보합니다.
+        input_image_url: Optional[str] = None
+        try:
+            input_ext = os.path.splitext(image.filename)[1] or ".png"
+            input_result_filename = f"{job_id}_input{input_ext}"
+            input_result_path = os.path.join(INPUTS_DIR, input_result_filename)
+            shutil.copyfile(file_path, input_result_path)
+            input_image_url = f"/inputs/{input_result_filename}"
+            logger.info(f"[{job_id}] 입력 합성 이미지 저장 완료: {input_result_path} (url={input_image_url})")
+        except Exception as copy_err:
+            logger.error(f"[{job_id}] 입력 합성 이미지 저장 실패: {copy_err}", exc_info=True)
         
         job_status[job_id] = {
             "status": "pending",
             "progress": 0,
-            "message": "작업이 대기 중입니다."
+            "message": "작업이 대기 중입니다.",
+            # 결과는 생성 전에도 input_image_url 을 제공하여 프론트 히스토리 영속성을 보장합니다.
+            "result": {
+                "images": {},
+                "input_image_url": input_image_url,
+            },
         }
         
         # USE_DEMO = os.getenv("USE_DEMO", "false").lower() == "true"
@@ -134,7 +156,8 @@ async def upload_image(
         return {
             "success": True,
             "job_id": job_id,
-            "message": "이미지 업로드 완료. 처리 중입니다."
+            "message": "이미지 업로드 완료. 처리 중입니다.",
+            "input_image_url": input_image_url,
         }
         
     except Exception as e:
@@ -170,13 +193,13 @@ async def simulate_demo_processing(job_id: str, file_path: str):
 
         await asyncio.sleep(5)
 
-        # 업로드된 합성 입력 이미지를 결과 디렉토리로 복사하여, 히스토리에서 안정적으로 참조할 수 있도록 함
+        # 업로드된 합성 입력 이미지를 inputs 디렉토리로 복사하여, 히스토리에서 안정적으로 참조할 수 있도록 함
         input_ext = os.path.splitext(file_path)[1] or ".png"
         input_result_filename = f"{job_id}_input{input_ext}"
-        input_result_path = os.path.join(RESULTS_DIR, input_result_filename)
+        input_result_path = os.path.join(INPUTS_DIR, input_result_filename)
         try:
             shutil.copyfile(file_path, input_result_path)
-            input_image_url = f"/results/{input_result_filename}"
+            input_image_url = f"/inputs/{input_result_filename}"
             logger.info(f"[{job_id}] 입력 합성 이미지 복사 완료: {input_result_path} (url={input_image_url})")
         except Exception as copy_err:
             logger.error(f"[{job_id}] 입력 합성 이미지 복사 실패: {copy_err}")
@@ -201,7 +224,7 @@ async def simulate_demo_processing(job_id: str, file_path: str):
         result_payload = {
             # 색상별 결과 이미지 URL (상대 경로)
             "images": color_images,
-            # 프론트엔드에서 좌측 인풋으로 사용할 합성 입력 이미지 URL (RESULTS_DIR 기반)
+            # 프론트엔드에서 좌측 인풋으로 사용할 합성 입력 이미지 URL (INPUTS_DIR 기반)
             "input_image_url": input_image_url,
             # 참고용으로 입력 이미지 서버 경로도 함께 반환
             "original_upload_path": file_path,
@@ -272,7 +295,8 @@ async def send_to_colab(job_id: str, file_path: str):
 
         # 7개 색상 결과를 누적할 맵
         aggregated_images: Dict[str, str] = {}
-        input_image_url: Optional[str] = None
+        # upload 단계에서 results로 저장한 input_image_url 이 있으면 기본값으로 사용
+        input_image_url: Optional[str] = (job_status.get(job_id, {}).get("result") or {}).get("input_image_url")
 
         async with httpx.AsyncClient(timeout=COLAB_TIMEOUT, headers=headers) as client:
             for idx, (color_key, color_label) in enumerate(color_sequence):
@@ -325,7 +349,7 @@ async def send_to_colab(job_id: str, file_path: str):
                             job_status[job_id]["message"] = f"{color_label} 색상 처리 중 응답 형식 오류"
                             return
 
-                        # 최초 응답에서 input_image_url 을 한 번만 확보
+                        # 최초 응답에서 input_image_url 을 한 번만 확보 (없으면 업로드 단계에서 저장한 값 유지)
                         if input_image_url is None:
                             input_image_url = inner_result.get("input_image_url")
 
@@ -465,6 +489,8 @@ async def download_image(path: str, filename: Optional[str] = None):
 
   # 허용된 디렉토리만 처리
   base_dir: Optional[str] = None
+  if rel_path.startswith("/inputs/"):
+      base_dir = INPUTS_DIR
   if rel_path.startswith("/sample_outputs/"):
       base_dir = SAMPLE_OUTPUTS_DIR
   elif rel_path.startswith("/results/"):
@@ -521,8 +547,11 @@ async def colab_callback(job_id: str, payload: dict = Body(...)):
         message = payload.get("message") or "이미지 생성이 완료되었습니다."
         raw_result = payload.get("result") or {}
 
-        images = raw_result.get("images", {})              # 색상별 결과 URL 맵 (이미 절대 URL이면 그대로)
-        input_image_url = raw_result.get("input_image_url")  # 좌측 인풋 이미지 URL
+        images = raw_result.get("images", {})                # 색상별 결과 URL 맵 (이미 절대 URL이면 그대로)
+        incoming_input_image_url = raw_result.get("input_image_url")  # 좌측 인풋 이미지 URL
+        # payload에 input_image_url이 없으면 upload 단계에서 저장한 값을 유지
+        existing_input_image_url = (job_status[job_id].get("result") or {}).get("input_image_url")
+        input_image_url = incoming_input_image_url or existing_input_image_url
 
         # 상태 업데이트
         job_status[job_id]["status"] = status_value
