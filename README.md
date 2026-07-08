@@ -1,5 +1,7 @@
 ## Lumiply Server (FastAPI)
 
+KCI 등재: [색상 제어 MLP 어댑터를 적용한 Stable Diffusion 기반 2D 실내 리라이팅 시스템](https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?sereArticleSearchBean.artiId=ART003309336)
+
 ![demo](images/lumiply_gif_demo.gif)
 
 ## 전체 세팅 순서
